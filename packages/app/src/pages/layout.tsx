@@ -3,6 +3,7 @@ import {
   createEffect,
   createMemo,
   createResource,
+  createSignal,
   For,
   on,
   onCleanup,
@@ -2084,6 +2085,45 @@ export default function Layout(props: ParentProps) {
       return item.vcs === "git" || layout.sidebar.workspaces(item.worktree)()
     })
     const homedir = createMemo(() => globalSync.data.path.home)
+    
+    // ── 插件侧边栏面板 ──────────────────────────
+    // 兼容 PR #16804（ui.sidebar 按钮）和本PR（sidebar 数据面板）
+    const [pluginPanels, setPluginPanels] = createSignal<Array<{
+      id: string
+      title: string
+      items: Array<{ label: string; value?: string; status?: "info" | "success" | "warning" | "error" }>
+    }>>([])
+    
+    createEffect(() => {
+      if (!pageReady()) return
+      if (!layoutReady()) return
+      
+      const conn = server.current
+      if (!conn?.http?.url) return
+      
+      let running = true
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      
+      const poll = async () => {
+        if (!running) return
+        try {
+          const res = await fetch(`${conn.http.url}/plugin/sidebar`)
+          if (!running) return
+          if (res.ok) {
+            const data = await res.json()
+            // 兼容 #16804：返回 { items } 和/或 { panels }
+            setPluginPanels(data.panels ?? [])
+          }
+        } catch {}
+        if (running) timeoutId = setTimeout(poll, 5000)
+      }
+      
+      poll()
+      onCleanup(() => {
+        running = false
+        if (timeoutId) clearTimeout(timeoutId)
+      })
+    })
 
     return (
       <div
@@ -2335,6 +2375,42 @@ export default function Layout(props: ParentProps) {
             </div>
           </div>
         </div>
+        
+        {/* ── 插件侧边栏面板 ───────────────────── */}
+        <Show when={pluginPanels().length > 0}>
+          <div class="shrink-0 px-3 pb-3 flex flex-col gap-3 overflow-y-auto max-h-64">
+            <For each={pluginPanels()}>
+              {(panel) => (
+                <div class="rounded-xl bg-background-base shadow-xs-border-base overflow-hidden">
+                  <div class="px-3 pt-2.5 pb-1.5">
+                    <div class="text-12-medium text-text-strong uppercase tracking-wider">{panel.title}</div>
+                  </div>
+                  <div class="px-3 pb-2.5 flex flex-col gap-1">
+                    <For each={panel.items}>
+                      {(item) => {
+                        const statusColors: Record<string, string> = {
+                          success: "bg-surface-success-strong",
+                          warning: "bg-surface-warning-strong",
+                          error: "bg-surface-critical-strong",
+                        }
+                        const dotColor = () => statusColors[item.status ?? "info"] ?? "bg-icon-base"
+                        return (
+                          <div class="flex items-center gap-2 min-w-0">
+                            <div class={`size-1.5 shrink-0 rounded-full ${dotColor()}`} />
+                            <span class="text-14-regular text-text-strong truncate">{item.label}</span>
+                            <Show when={item.value !== undefined}>
+                              <span class="text-14-regular text-text-base ml-auto tabular-nums">{item.value}</span>
+                            </Show>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
       </div>
     )
   }
